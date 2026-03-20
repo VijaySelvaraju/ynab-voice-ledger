@@ -15,44 +15,99 @@ export interface ParsedTransaction {
   needsReview: boolean;
 }
 
-const CATEGORY_MAP: Record<string, string> = {
-  dining: "Dining Out",
-  restaurant: "Dining Out",
-  pizza: "Dining Out",
-  lunch: "Dining Out",
-  dinner: "Dining Out",
-  breakfast: "Dining Out",
-  cafe: "Dining Out",
-  coffee: "Dining Out",
-  groceries: "Groceries",
-  supermarket: "Groceries",
-  carrefour: "Groceries",
-  monoprix: "Groceries",
-  lidl: "Groceries",
-  aldi: "Groceries",
-  metro: "Transportation",
-  bus: "Transportation",
-  uber: "Transportation",
-  taxi: "Transportation",
-  transport: "Transportation",
-  navigo: "Transportation",
-  train: "Transportation",
-  amazon: "Shopping",
-  shopping: "Shopping",
-  clothes: "Shopping",
-  shoes: "Shopping",
-  netflix: "Subscriptions",
-  spotify: "Subscriptions",
-  subscription: "Subscriptions",
-  pharmacy: "Medical",
-  doctor: "Medical",
-  medical: "Medical",
-  rent: "Bills",
-  electricity: "Bills",
-  water: "Bills",
-  internet: "Bills",
-  phone: "Bills",
+// Extra keyword hints that map common words to likely category name fragments.
+// These help match user input to real YNAB categories when the category name
+// itself doesn't appear in the text (e.g., typing "pizza" should match a
+// category containing "dining" or "restaurant").
+const KEYWORD_HINTS: Record<string, string[]> = {
+  pizza: ["dining", "restaurant", "food", "eating"],
+  lunch: ["dining", "restaurant", "food", "eating"],
+  dinner: ["dining", "restaurant", "food", "eating"],
+  breakfast: ["dining", "restaurant", "food", "eating"],
+  cafe: ["dining", "restaurant", "food", "coffee", "eating"],
+  coffee: ["dining", "restaurant", "food", "coffee", "eating"],
+  supermarket: ["groceries", "food"],
+  carrefour: ["groceries", "food"],
+  monoprix: ["groceries", "food"],
+  lidl: ["groceries", "food"],
+  aldi: ["groceries", "food"],
+  metro: ["transport", "travel"],
+  bus: ["transport", "travel"],
+  uber: ["transport", "travel", "ride"],
+  taxi: ["transport", "travel", "ride"],
+  navigo: ["transport", "travel"],
+  train: ["transport", "travel"],
+  amazon: ["shopping"],
+  clothes: ["shopping", "clothing"],
+  shoes: ["shopping", "clothing"],
+  netflix: ["subscription", "entertainment", "streaming"],
+  spotify: ["subscription", "entertainment", "streaming", "music"],
+  pharmacy: ["medical", "health"],
+  doctor: ["medical", "health"],
+  rent: ["bills", "housing", "rent"],
+  electricity: ["bills", "utilities"],
+  water: ["bills", "utilities"],
+  internet: ["bills", "utilities"],
+  phone: ["bills", "utilities", "phone"],
 };
+
+// Builds a lookup from the user's real YNAB categories.
+// For each category, we generate searchable tokens from the category name.
+function buildCategoryMatcher(ynabCategories: string[]): (text: string) => string {
+  // Pre-compute lowercase tokens for each category
+  const entries = ynabCategories.map((name) => ({
+    name,
+    tokens: name.toLowerCase().split(/[\s/&:,.-]+/).filter(Boolean),
+  }));
+
+  return (text: string): string => {
+    const lower = text.toLowerCase();
+    const words = lower.split(/\s+/);
+
+    // 1. Direct match: a word in the input exactly matches a category token
+    for (const entry of entries) {
+      for (const token of entry.tokens) {
+        if (token.length >= 3 && lower.includes(token)) {
+          return entry.name;
+        }
+      }
+    }
+
+    // 2. Hint-based match: a word in the input has keyword hints, and one of
+    //    those hints matches a category token
+    for (const word of words) {
+      const hints = KEYWORD_HINTS[word];
+      if (!hints) continue;
+      for (const hint of hints) {
+        for (const entry of entries) {
+          for (const token of entry.tokens) {
+            if (token.includes(hint) || hint.includes(token)) {
+              return entry.name;
+            }
+          }
+        }
+      }
+    }
+
+    return "Uncategorized";
+  };
+}
+
+// All category keywords used for payee/memo extraction
+function getAllCategoryKeywords(ynabCategories: string[]): Set<string> {
+  const keywords = new Set<string>();
+  // Add all hint keywords
+  for (const key of Object.keys(KEYWORD_HINTS)) {
+    keywords.add(key);
+  }
+  // Add tokens from real category names
+  for (const name of ynabCategories) {
+    for (const token of name.toLowerCase().split(/[\s/&:,.-]+/)) {
+      if (token.length >= 3) keywords.add(token);
+    }
+  }
+  return keywords;
+}
 
 const KNOWN_BRANDS = [
   "dominos pizza",
@@ -207,17 +262,7 @@ function parseAmount(text: string): { amount: number; remaining: string } {
   return { amount: milliunits, remaining };
 }
 
-function detectCategory(text: string): string {
-  const lower = text.toLowerCase();
-  for (const [keyword, category] of Object.entries(CATEGORY_MAP)) {
-    if (lower.includes(keyword)) {
-      return category;
-    }
-  }
-  return "Uncategorized";
-}
-
-function extractPayee(text: string): { payee: string; remaining: string } {
+function extractPayee(text: string, categoryKeywords: Set<string>): { payee: string; remaining: string } {
   const lower = text.toLowerCase();
 
   // Check known brands first
@@ -234,7 +279,6 @@ function extractPayee(text: string): { payee: string; remaining: string } {
 
   // Take the first word(s) that look like a name (capitalized or first words)
   const words = text.split(/\s+/);
-  const categoryKeywords = new Set(Object.keys(CATEGORY_MAP));
 
   // Find first word that isn't a category keyword
   const payeeWords: string[] = [];
@@ -262,9 +306,9 @@ function extractPayee(text: string): { payee: string; remaining: string } {
   return { payee, remaining };
 }
 
-function removeCategoryKeywords(text: string): string {
+function removeCategoryKeywords(text: string, categoryKeywords: Set<string>): string {
   let result = text;
-  for (const keyword of Object.keys(CATEGORY_MAP)) {
+  for (const keyword of categoryKeywords) {
     result = result.replace(new RegExp(`\\b${keyword}\\b`, "gi"), "").trim();
   }
   // Clean up extra whitespace
@@ -273,6 +317,7 @@ function removeCategoryKeywords(text: string): string {
 
 export function parseTransaction(
   input: string,
+  ynabCategories: string[] = [],
   today: Date = new Date()
 ): ParsedTransaction {
   let needsReview = false;
@@ -289,6 +334,9 @@ export function parseTransaction(
     };
   }
 
+  const detectCategory = buildCategoryMatcher(ynabCategories);
+  const categoryKeywords = getAllCategoryKeywords(ynabCategories);
+
   // Step 1: Parse date from the beginning
   const { date, remaining: afterDate } = parseDate(trimmed, today);
 
@@ -302,10 +350,10 @@ export function parseTransaction(
   const category = detectCategory(afterAmount);
 
   // Step 4: Extract payee from the beginning of remaining text
-  const { payee, remaining: afterPayee } = extractPayee(afterAmount);
+  const { payee, remaining: afterPayee } = extractPayee(afterAmount, categoryKeywords);
 
   // Step 5: Memo is whatever is left after removing category keywords
-  const memo = removeCategoryKeywords(afterPayee);
+  const memo = removeCategoryKeywords(afterPayee, categoryKeywords);
 
   if (!payee || payee === "Unknown") {
     needsReview = true;
@@ -323,6 +371,7 @@ export function parseTransaction(
 
 export function parseMultipleTransactions(
   input: string,
+  ynabCategories: string[] = [],
   today: Date = new Date()
 ): ParsedTransaction[] {
   const lines = input
@@ -330,5 +379,5 @@ export function parseMultipleTransactions(
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  return lines.map((line) => parseTransaction(line, today));
+  return lines.map((line) => parseTransaction(line, ynabCategories, today));
 }

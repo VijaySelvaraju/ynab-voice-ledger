@@ -21,7 +21,7 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
   const [submitted, setSubmitted] = useState(false);
 
   function handleParse() {
-    const parsed = parseMultipleTransactions(input);
+    const parsed = parseMultipleTransactions(input, config.categories || []);
     setRows(parsed.map((p) => ({ ...p, status: "pending" as const })));
     setSubmitted(false);
   }
