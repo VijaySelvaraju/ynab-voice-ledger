@@ -31,20 +31,27 @@ Each line is parsed independently. The parser extracts:
 | **Date** | Beginning of the line. Supports `today`, `yesterday`, `20th march`, `march 15 2026`, `15/03/2026`, `2026-03-20`. Defaults to today if omitted. Year defaults to current year if omitted. |
 | **Amount** | Numeric value, typically at the end. Supports decimals with `.` or `,`. Recognizes currency words (`euros`, `eur`, `€`). Always stored as negative milliunits (YNAB format: €16.00 = -16000). |
 | **Payee** | Known brands are matched first (Dominos Pizza, Carrefour, Amazon, etc.). Otherwise, the first word(s) before any category keyword are used. |
-| **Category** | Keyword matching against a built-in map (see below). Falls back to "Uncategorized". |
+| **Category** | Matched against your real YNAB categories (fetched during setup). Keyword hints help map common words to the right category. Falls back to "Uncategorized". |
 | **Memo** | Whatever descriptive text remains after extracting the other fields. |
 
-### Category Keyword Map
+### Category Matching
 
-| Keywords | Category |
+During setup, the app fetches all your real YNAB categories via `GET /budgets/{id}/categories`. When parsing, category detection works in two passes:
+
+1. **Direct match** — words in your input are compared against tokens from your real category names. For example, typing "groceries" matches your "Groceries" category directly.
+2. **Hint-based match** — common keywords are mapped to category name fragments so the parser can find the right category even when the category name itself isn't in the input:
+
+| Keywords | Matched to categories containing... |
 |---|---|
-| dining, restaurant, pizza, lunch, dinner, breakfast, cafe, coffee | Dining Out |
-| groceries, supermarket, carrefour, monoprix, lidl, aldi | Groceries |
-| metro, bus, uber, taxi, transport, navigo, train | Transportation |
-| amazon, shopping, clothes, shoes | Shopping |
-| netflix, spotify, subscription | Subscriptions |
-| pharmacy, doctor, medical | Medical |
-| rent, electricity, water, internet, phone | Bills |
+| pizza, lunch, dinner, breakfast, cafe, coffee | dining, restaurant, food, eating |
+| supermarket, carrefour, monoprix, lidl, aldi | groceries, food |
+| metro, bus, uber, taxi, navigo, train | transport, travel |
+| amazon, clothes, shoes | shopping, clothing |
+| netflix, spotify | subscription, entertainment, streaming |
+| pharmacy, doctor | medical, health |
+| rent, electricity, water, internet, phone | bills, utilities, housing |
+
+If no match is found, the category defaults to "Uncategorized" — you can always fix it in the review table or in YNAB itself.
 
 If the parser can't confidently extract a payee or amount, the row is flagged as "needs review" with a yellow highlight so you can fix it before submitting.
 
@@ -55,7 +62,7 @@ If the parser can't confidently extract a payee or amount, the row is flagged as
 A step-by-step wizard shown on first launch:
 
 1. **Enter your YNAB Personal Access Token** — stored in localStorage, shown as a password field with a reveal toggle
-2. **Select a budget** — fetched from `GET /budgets`
+2. **Select a budget** — fetched from `GET /budgets`. This also fetches your categories from `GET /budgets/{id}/categories` so the parser can match against your real category names.
 3. **Select a staging account** — fetched from `GET /budgets/{id}/accounts`, filtered to exclude closed/deleted accounts
 
 The selected account (e.g., "Inbox") is the **only** account the app will ever write to. This is enforced architecturally, not just by convention. A "Reset Setup" button on the main screen lets you reconfigure.
@@ -79,12 +86,13 @@ This is the most important part of the architecture. The app is designed to be *
 
 ### Single API Module
 
-All YNAB API communication goes through one file: `src/lib/ynab-api.ts`. This module exposes exactly **three functions**:
+All YNAB API communication goes through one file: `src/lib/ynab-api.ts`. This module exposes exactly **four functions**:
 
 | Function | Method | Purpose |
 |---|---|---|
 | `fetchBudgets(token)` | `GET /budgets` | Setup only — list available budgets |
 | `fetchAccounts(token, budgetId)` | `GET /budgets/{id}/accounts` | Setup only — list accounts in a budget |
+| `fetchCategories(token, budgetId)` | `GET /budgets/{id}/categories` | Setup only — fetch real category names for parsing |
 | `createTransactions(token, budgetId, accountId, transactions)` | `POST /budgets/{id}/transactions` | The only write operation |
 
 ### What the app cannot do
@@ -92,7 +100,7 @@ All YNAB API communication goes through one file: `src/lib/ynab-api.ts`. This mo
 - **No PUT or PATCH** — cannot update existing transactions
 - **No DELETE** — cannot delete anything
 - **No cross-account writes** — `createTransactions` validates the account ID against the stored setup config and throws an error if they don't match
-- **No other endpoints** — no scheduled transactions, no payee management, no category editing, no goal modification, no month budget changes
+- **No other endpoints** — no scheduled transactions, no payee management, no category editing, no goal modification, no month budget changes (categories are read-only during setup)
 - **No direct fetch calls** — all YNAB API traffic must go through the wrapper module
 
 ### Transaction safety defaults
@@ -167,6 +175,7 @@ No AI/LLM libraries. No backend server. No OAuth. No database. All state lives i
 ## Design Decisions
 
 - **Rule-based parser over AI**: Deterministic, fast, works offline, no API costs. The trade-off is less flexibility, but the editable review table compensates — you can always fix what the parser gets wrong.
+- **Real categories over hardcoded guesses**: The app fetches your actual YNAB categories during setup and matches against them, so parsed categories align with your budget structure.
 - **Single staging account**: Rather than guarding against mistakes with confirmation dialogs, the app is architecturally limited to one account. You move transactions to the right account in YNAB itself.
 - **Unapproved by default**: Transactions need explicit approval in YNAB, acting as a second safety net.
 - **No backend**: The YNAB Personal Access Token is stored in localStorage and sent directly to the YNAB API from the browser. This is a personal tool, not a multi-user SaaS.
