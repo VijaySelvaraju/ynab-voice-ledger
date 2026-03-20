@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fetchBudgets, fetchAccounts, type Budget, type Account } from "../lib/ynab-api";
+import { fetchBudgets, fetchAccounts, fetchCategories, type Budget, type Account } from "../lib/ynab-api";
 import { saveSetup, type SetupConfig } from "../lib/storage";
 
 interface Props {
@@ -12,6 +12,7 @@ export default function SetupScreen({ onComplete }: Props) {
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [selectedBudget, setSelectedBudget] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const [selectedAccount, setSelectedAccount] = useState("");
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [loading, setLoading] = useState(false);
@@ -37,8 +38,12 @@ export default function SetupScreen({ onComplete }: Props) {
     setLoading(true);
     setError("");
     try {
-      const a = await fetchAccounts(token.trim(), budgetId);
+      const [a, cats] = await Promise.all([
+        fetchAccounts(token.trim(), budgetId),
+        fetchCategories(token.trim(), budgetId),
+      ]);
       setAccounts(a);
+      setCategories(cats.map((c) => c.name));
       setStep(3);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch accounts");
@@ -55,6 +60,7 @@ export default function SetupScreen({ onComplete }: Props) {
       budgetId: selectedBudget,
       accountId: selectedAccount,
       accountName: account.name,
+      categories,
     };
     saveSetup(config);
     onComplete(config);

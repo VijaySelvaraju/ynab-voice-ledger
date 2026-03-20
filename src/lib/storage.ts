@@ -3,6 +3,7 @@ export interface SetupConfig {
   budgetId: string;
   accountId: string;
   accountName: string;
+  categories: string[];
 }
 
 export interface HistoryEntry {

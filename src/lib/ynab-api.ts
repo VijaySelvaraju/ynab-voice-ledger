@@ -1,5 +1,6 @@
 // SAFETY: This module is the ONLY place that talks to the YNAB API.
-// It can ONLY create transactions in the pre-selected staging account.
+// It can ONLY read budgets/accounts/categories (for setup) and create
+// transactions in the pre-selected staging account.
 // It cannot update, delete, or read transactions from any other account.
 // This is by design. Do not add new API functions without explicit approval.
 
@@ -14,6 +15,14 @@ export interface Account {
   id: string;
   name: string;
   closed: boolean;
+  deleted: boolean;
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  category_group_name: string;
+  hidden: boolean;
   deleted: boolean;
 }
 
@@ -79,6 +88,38 @@ export async function fetchAccounts(
       id: a.id,
       name: a.name,
     }));
+}
+
+export async function fetchCategories(
+  token: string,
+  budgetId: string
+): Promise<Category[]> {
+  const res = await fetch(`${BASE_URL}/budgets/${budgetId}/categories`, {
+    method: "GET",
+    headers: headers(token),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(
+      `Failed to fetch categories: ${res.status} ${body?.error?.detail || res.statusText}`
+    );
+  }
+  const data = await res.json();
+  const categories: Category[] = [];
+  for (const group of data.data.category_groups) {
+    for (const cat of group.categories) {
+      if (!cat.hidden && !cat.deleted) {
+        categories.push({
+          id: cat.id,
+          name: cat.name,
+          category_group_name: group.name,
+          hidden: cat.hidden,
+          deleted: cat.deleted,
+        });
+      }
+    }
+  }
+  return categories;
 }
 
 export async function createTransactions(
