@@ -14,16 +14,47 @@ interface ReviewRow extends ParsedTransaction {
   errorMessage?: string;
 }
 
+// Max single-transaction amount in euros before showing a warning
+const LARGE_AMOUNT_THRESHOLD = 500;
+// Max transactions per day
+const DAILY_TRANSACTION_LIMIT = 20;
+const DAILY_COUNT_KEY = "ynab-daily-count";
+
+function getDailyCount(): { date: string; count: number } {
+  const raw = localStorage.getItem(DAILY_COUNT_KEY);
+  if (!raw) return { date: "", count: 0 };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { date: "", count: 0 };
+  }
+}
+
+function incrementDailyCount(n: number): void {
+  const today = new Date().toISOString().slice(0, 10);
+  const current = getDailyCount();
+  const count = current.date === today ? current.count + n : n;
+  localStorage.setItem(DAILY_COUNT_KEY, JSON.stringify({ date: today, count }));
+}
+
+function getTodayCount(): number {
+  const today = new Date().toISOString().slice(0, 10);
+  const current = getDailyCount();
+  return current.date === today ? current.count : 0;
+}
+
 export default function TransactionEntry({ config, onTransactionsCreated }: Props) {
   const [input, setInput] = useState("");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   function handleParse() {
     const parsed = parseMultipleTransactions(input, config.categories || []);
     setRows(parsed.map((p) => ({ ...p, status: "pending" as const })));
     setSubmitted(false);
+    setShowConfirm(false);
   }
 
   function updateRow(index: number, field: keyof ParsedTransaction, value: string | number) {
@@ -40,12 +71,25 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
 
   function removeRow(index: number) {
     setRows((prev) => prev.filter((_, i) => i !== index));
+    setShowConfirm(false);
   }
 
-  async function handleSubmit() {
-    const pendingRows = rows.filter((r) => r.status === "pending");
-    if (pendingRows.length === 0) return;
+  // --- Guardrails ---
+  const pendingRows = rows.filter((r) => r.status === "pending");
+  const totalAmount = pendingRows.reduce((sum, r) => sum + Math.abs(r.amount), 0) / 1000;
+  const largeAmountRows = pendingRows.filter(
+    (r) => Math.abs(r.amount) / 1000 > LARGE_AMOUNT_THRESHOLD
+  );
+  const todayCount = getTodayCount();
+  const wouldExceedLimit = todayCount + pendingRows.length > DAILY_TRANSACTION_LIMIT;
 
+  function handleSubmitClick() {
+    if (pendingRows.length === 0) return;
+    setShowConfirm(true);
+  }
+
+  async function handleConfirmedSubmit() {
+    setShowConfirm(false);
     setSubmitting(true);
     try {
       const transactions = pendingRows.map((r) => ({
@@ -62,6 +106,9 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
       setRows((prev) =>
         prev.map((r) => (r.status === "pending" ? { ...r, status: "success" as const } : r))
       );
+
+      // Track daily count
+      incrementDailyCount(pendingRows.length);
 
       // Add to history
       addToHistory(
@@ -91,10 +138,14 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
     setInput("");
     setRows([]);
     setSubmitted(false);
+    setShowConfirm(false);
   }
 
   const hasPendingRows = rows.some((r) => r.status === "pending");
   const hasReviewRows = rows.some((r) => r.needsReview && r.status === "pending");
+
+  // Build category options from config
+  const categoryOptions = ["Uncategorized", ...(config.categories || []).filter((c) => c !== "Uncategorized")];
 
   return (
     <div>
@@ -162,7 +213,9 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
                           ? "bg-red-50"
                           : row.needsReview
                             ? "bg-yellow-50"
-                            : ""
+                            : Math.abs(row.amount) / 1000 > LARGE_AMOUNT_THRESHOLD
+                              ? "bg-orange-50"
+                              : ""
                     }`}
                   >
                     <td className="p-2">
@@ -184,13 +237,22 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
                       />
                     </td>
                     <td className="p-2">
-                      <input
-                        type="text"
+                      <select
                         value={row.category}
                         onChange={(e) => updateRow(i, "category", e.target.value)}
                         disabled={row.status !== "pending"}
-                        className="border border-gray-300 rounded px-1.5 py-1 text-sm w-28 disabled:bg-gray-100"
-                      />
+                        className="border border-gray-300 rounded px-1.5 py-1 text-sm w-36 disabled:bg-gray-100"
+                      >
+                        {categoryOptions.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                        {/* If the parsed category isn't in the list, show it anyway */}
+                        {!categoryOptions.includes(row.category) && (
+                          <option value={row.category}>{row.category} (custom)</option>
+                        )}
+                      </select>
                     </td>
                     <td className="p-2">
                       <input
@@ -225,7 +287,10 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
                       {row.status === "pending" && row.needsReview && (
                         <span className="text-amber-600 font-medium">Review</span>
                       )}
-                      {row.status === "pending" && !row.needsReview && (
+                      {row.status === "pending" && !row.needsReview && Math.abs(row.amount) / 1000 > LARGE_AMOUNT_THRESHOLD && (
+                        <span className="text-orange-600 font-medium" title={`Amount exceeds €${LARGE_AMOUNT_THRESHOLD}`}>⚠️ Large</span>
+                      )}
+                      {row.status === "pending" && !row.needsReview && Math.abs(row.amount) / 1000 <= LARGE_AMOUNT_THRESHOLD && (
                         <span className="text-gray-400">Ready</span>
                       )}
                     </td>
@@ -246,14 +311,73 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
             </table>
           </div>
 
+          {/* Summary & guardrails */}
           {hasPendingRows && (
-            <button
-              onClick={handleSubmit}
-              disabled={submitting}
-              className="mt-4 bg-green-600 text-white rounded-lg py-2 px-6 text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {submitting ? "Creating..." : "Create All"}
-            </button>
+            <div className="mt-4 space-y-3">
+              {/* Total summary */}
+              <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-700">
+                <div className="flex justify-between">
+                  <span>Transactions to create:</span>
+                  <span className="font-medium">{pendingRows.length}</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span>Total amount:</span>
+                  <span className="font-medium">€{totalAmount.toFixed(2)}</span>
+                </div>
+                {todayCount > 0 && (
+                  <div className="flex justify-between mt-1 text-xs text-gray-500">
+                    <span>Created today:</span>
+                    <span>{todayCount} / {DAILY_TRANSACTION_LIMIT}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Warnings */}
+              {largeAmountRows.length > 0 && (
+                <div className="bg-orange-50 border border-orange-200 text-orange-700 rounded-lg p-3 text-sm">
+                  ⚠️ {largeAmountRows.length} transaction{largeAmountRows.length > 1 ? "s" : ""} exceed{largeAmountRows.length === 1 ? "s" : ""} €{LARGE_AMOUNT_THRESHOLD}. Please double-check.
+                </div>
+              )}
+
+              {wouldExceedLimit && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">
+                  🚫 This would exceed the daily limit of {DAILY_TRANSACTION_LIMIT} transactions ({todayCount} already created today).
+                </div>
+              )}
+
+              {/* Confirmation dialog */}
+              {!showConfirm ? (
+                <button
+                  onClick={handleSubmitClick}
+                  disabled={submitting || wouldExceedLimit}
+                  className="bg-green-600 text-white rounded-lg py-2 px-6 text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {submitting ? "Creating..." : "Create All"}
+                </button>
+              ) : (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-900 font-medium mb-3">
+                    Create {pendingRows.length} transaction{pendingRows.length > 1 ? "s" : ""} totaling €{totalAmount.toFixed(2)} in "{config.accountName}"?
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleConfirmedSubmit}
+                      disabled={submitting}
+                      className="bg-green-600 text-white rounded-lg py-2 px-4 text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {submitting ? "Creating..." : "Yes, create"}
+                    </button>
+                    <button
+                      onClick={() => setShowConfirm(false)}
+                      disabled={submitting}
+                      className="bg-gray-200 text-gray-700 rounded-lg py-2 px-4 text-sm font-medium hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {submitted && !hasPendingRows && (

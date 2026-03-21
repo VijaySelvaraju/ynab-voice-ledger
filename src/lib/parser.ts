@@ -15,10 +15,9 @@ export interface ParsedTransaction {
   needsReview: boolean;
 }
 
-// Extra keyword hints that map common words to likely category name fragments.
-// These help match user input to real YNAB categories when the category name
-// itself doesn't appear in the text (e.g., typing "pizza" should match a
-// category containing "dining" or "restaurant").
+// ---------------------------------------------------------------------------
+// Keyword hints: common words → likely YNAB category name fragments
+// ---------------------------------------------------------------------------
 const KEYWORD_HINTS: Record<string, string[]> = {
   pizza: ["dining", "restaurant", "food", "eating"],
   lunch: ["dining", "restaurant", "food", "eating"],
@@ -51,64 +50,9 @@ const KEYWORD_HINTS: Record<string, string[]> = {
   phone: ["bills", "utilities", "phone"],
 };
 
-// Builds a lookup from the user's real YNAB categories.
-// For each category, we generate searchable tokens from the category name.
-function buildCategoryMatcher(ynabCategories: string[]): (text: string) => string {
-  // Pre-compute lowercase tokens for each category
-  const entries = ynabCategories.map((name) => ({
-    name,
-    tokens: name.toLowerCase().split(/[\s/&:,.-]+/).filter(Boolean),
-  }));
-
-  return (text: string): string => {
-    const lower = text.toLowerCase();
-    const words = lower.split(/\s+/);
-
-    // 1. Direct match: a word in the input exactly matches a category token
-    for (const entry of entries) {
-      for (const token of entry.tokens) {
-        if (token.length >= 3 && lower.includes(token)) {
-          return entry.name;
-        }
-      }
-    }
-
-    // 2. Hint-based match: a word in the input has keyword hints, and one of
-    //    those hints matches a category token
-    for (const word of words) {
-      const hints = KEYWORD_HINTS[word];
-      if (!hints) continue;
-      for (const hint of hints) {
-        for (const entry of entries) {
-          for (const token of entry.tokens) {
-            if (token.includes(hint) || hint.includes(token)) {
-              return entry.name;
-            }
-          }
-        }
-      }
-    }
-
-    return "Uncategorized";
-  };
-}
-
-// All category keywords used for payee/memo extraction
-function getAllCategoryKeywords(ynabCategories: string[]): Set<string> {
-  const keywords = new Set<string>();
-  // Add all hint keywords
-  for (const key of Object.keys(KEYWORD_HINTS)) {
-    keywords.add(key);
-  }
-  // Add tokens from real category names
-  for (const name of ynabCategories) {
-    for (const token of name.toLowerCase().split(/[\s/&:,.-]+/)) {
-      if (token.length >= 3) keywords.add(token);
-    }
-  }
-  return keywords;
-}
-
+// ---------------------------------------------------------------------------
+// Known multi-word brands (must be lowercase)
+// ---------------------------------------------------------------------------
 const KNOWN_BRANDS = [
   "dominos pizza",
   "burger king",
@@ -128,6 +72,114 @@ const KNOWN_BRANDS = [
   "h&m",
 ];
 
+// ---------------------------------------------------------------------------
+// Category matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a function that matches free-form text to the best YNAB category.
+ * Matching priority: exact token → partial substring → keyword hint → Uncategorized
+ */
+function buildCategoryMatcher(ynabCategories: string[]): (text: string) => string {
+  const entries = ynabCategories.map((name) => ({
+    name,
+    lower: name.toLowerCase(),
+    tokens: name
+      .toLowerCase()
+      .split(/[\s/&:,.\-]+/)
+      .filter((t) => t.length >= 2),
+  }));
+
+  return (text: string): string => {
+    const lower = text.toLowerCase();
+    const words = lower.split(/\s+/).filter(Boolean);
+
+    // 1. Direct token match: an input word matches a category token
+    let bestMatch = "";
+    let bestScore = 0;
+
+    for (const entry of entries) {
+      let score = 0;
+      for (const token of entry.tokens) {
+        if (token.length < 3) continue;
+        // Exact word match scores highest
+        if (words.includes(token)) {
+          score += 10;
+        } else if (lower.includes(token)) {
+          // Substring match scores lower
+          score += 5;
+        }
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = entry.name;
+      }
+    }
+    if (bestScore >= 5) return bestMatch;
+
+    // 2. Hint-based match: input word has keyword hints that match a category
+    for (const word of words) {
+      const hints = KEYWORD_HINTS[word];
+      if (!hints) continue;
+      for (const hint of hints) {
+        for (const entry of entries) {
+          for (const token of entry.tokens) {
+            if (token.includes(hint) || hint.includes(token)) {
+              return entry.name;
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Check if any known brand keywords have hints
+    for (const brand of KNOWN_BRANDS) {
+      if (lower.includes(brand)) {
+        const brandWords = brand.split(/\s+/);
+        for (const bw of brandWords) {
+          const hints = KEYWORD_HINTS[bw];
+          if (!hints) continue;
+          for (const hint of hints) {
+            for (const entry of entries) {
+              for (const token of entry.tokens) {
+                if (token.includes(hint) || hint.includes(token)) {
+                  return entry.name;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return "Uncategorized";
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Build a set of all category-related keywords for filtering payee/memo
+// ---------------------------------------------------------------------------
+function getAllCategoryKeywords(ynabCategories: string[]): Set<string> {
+  const keywords = new Set<string>();
+  for (const key of Object.keys(KEYWORD_HINTS)) {
+    keywords.add(key);
+  }
+  for (const name of ynabCategories) {
+    for (const token of name.toLowerCase().split(/[\s/&:,.\-]+/)) {
+      if (token.length >= 3) keywords.add(token);
+    }
+  }
+  return keywords;
+}
+
+// ---------------------------------------------------------------------------
+// Currency words and symbols to strip
+// ---------------------------------------------------------------------------
+const CURRENCY_PATTERN = /\b(euros?|eur|dollars?|usd|pounds?|gbp|£|\$|€)\b/gi;
+
+// ---------------------------------------------------------------------------
+// Date parsing
+// ---------------------------------------------------------------------------
 function parseDate(text: string, today: Date): { date: string; remaining: string } {
   const lower = text.toLowerCase().trim();
 
@@ -214,15 +266,15 @@ function parseDate(text: string, today: Date): { date: string; remaining: string
   };
 }
 
+// ---------------------------------------------------------------------------
+// Amount parsing — uses regex match position to cleanly remove the amount
+// ---------------------------------------------------------------------------
 function parseAmount(text: string): { amount: number; remaining: string } {
-  // Remove currency words/symbols for matching but keep the text
-  const cleaned = text
-    .replace(/\b(euros?|eur|€)\b/gi, "")
-    .trim();
+  // Strip currency words/symbols first, remembering positions
+  const cleaned = text.replace(CURRENCY_PATTERN, " ").trim();
 
-  // Find numeric values (supports both . and , as decimal separators)
-  // Look for amount - try end of string first, then anywhere
-  const amounts: { value: number; index: number; length: number }[] = [];
+  // Find all numeric values
+  const amounts: { value: number; start: number; end: number }[] = [];
   const amountRegex = /(\d+(?:[.,]\d{1,2})?)/g;
   let match: RegExpExecArray | null;
 
@@ -230,7 +282,7 @@ function parseAmount(text: string): { amount: number; remaining: string } {
     const raw = match[1].replace(",", ".");
     const value = parseFloat(raw);
     if (!isNaN(value) && value > 0) {
-      amounts.push({ value, index: match.index, length: match[0].length });
+      amounts.push({ value, start: match.index, end: match.index + match[0].length });
     }
   }
 
@@ -242,53 +294,68 @@ function parseAmount(text: string): { amount: number; remaining: string } {
   const chosen = amounts[amounts.length - 1];
   const milliunits = -Math.round(chosen.value * 1000);
 
-  // Remove the amount and currency words from the original text
-  let remaining = text
-    .replace(/\b(euros?|eur|€)\b/gi, "")
-    .replace(chosen.value.toString(), "")
-    .replace(chosen.value.toFixed(2), "")
-    // Also try removing the original format with comma
-    .replace(chosen.value.toString().replace(".", ","), "")
-    .trim();
+  // Remove the amount and any adjacent currency words from the original text
+  // Build a regex that matches the number + optional surrounding currency words
+  const numStr = chosen.value.toString();
+  const numStrComma = numStr.replace(".", ",");
+  // Match: optional currency word/symbol, then the number, then optional currency word/symbol
+  const removePatterns = [
+    // "16 euros", "16.00 eur", "€16", etc.
+    new RegExp(
+      `(?:€|\\$|£)?\\s*(?:${escapeRegex(numStr)}|${escapeRegex(numStrComma)}|${escapeRegex(chosen.value.toFixed(2))}|${escapeRegex(chosen.value.toFixed(2).replace(".", ","))})\\s*(?:euros?|eur|dollars?|usd|pounds?|gbp)?`,
+      "gi"
+    ),
+  ];
 
-  // Clean up the numeric value from remaining text more aggressively
-  const numStr = text.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:euros?|eur|€)?/gi);
-  if (numStr) {
-    for (const ns of numStr) {
-      remaining = remaining.replace(ns, "").trim();
-    }
+  let remaining = text;
+  for (const pattern of removePatterns) {
+    remaining = remaining.replace(pattern, " ");
   }
+
+  // Also strip any leftover currency words
+  remaining = remaining.replace(CURRENCY_PATTERN, " ");
+
+  // Clean up whitespace and stray punctuation
+  remaining = cleanupText(remaining);
 
   return { amount: milliunits, remaining };
 }
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ---------------------------------------------------------------------------
+// Payee extraction
+// ---------------------------------------------------------------------------
 function extractPayee(text: string, categoryKeywords: Set<string>): { payee: string; remaining: string } {
   const lower = text.toLowerCase();
 
-  // Check known brands first
+  // Check known multi-word brands first
   for (const brand of KNOWN_BRANDS) {
     if (lower.includes(brand)) {
-      const payee = brand
-        .split(" ")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ");
-      const remaining = text.replace(new RegExp(brand, "i"), "").trim();
-      return { payee, remaining };
+      const payee = titleCase(brand);
+      // Remove the brand from text using its position
+      const idx = lower.indexOf(brand);
+      const remaining = (text.slice(0, idx) + " " + text.slice(idx + brand.length)).trim();
+      return { payee, remaining: cleanupText(remaining) };
     }
   }
 
-  // Take the first word(s) that look like a name (capitalized or first words)
-  const words = text.split(/\s+/);
+  // Split into clean words (strip commas and punctuation from each word)
+  const words = text
+    .split(/\s+/)
+    .map((w) => w.replace(/[,;:!?]+$/g, "").replace(/^[,;:!?]+/g, ""))
+    .filter((w) => w.length > 0);
 
-  // Find first word that isn't a category keyword
+  // Take the first word(s) that aren't category keywords
   const payeeWords: string[] = [];
   let payeeEndIndex = 0;
 
   for (let i = 0; i < words.length; i++) {
-    const wordLower = words[i].toLowerCase().replace(/[^a-z]/g, "");
-    if (categoryKeywords.has(wordLower)) {
-      break;
-    }
+    const wordLower = words[i].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (wordLower.length < 1) continue;
+    if (categoryKeywords.has(wordLower)) break;
     payeeWords.push(words[i]);
     payeeEndIndex = i + 1;
     // Take at most 3 words for payee
@@ -300,21 +367,58 @@ function extractPayee(text: string, categoryKeywords: Set<string>): { payee: str
   }
 
   const payee = payeeWords
+    .map((w) => {
+      // Strip remaining punctuation from payee words
+      const clean = w.replace(/[^a-zA-Z0-9\-'&]/g, "");
+      return clean.charAt(0).toUpperCase() + clean.slice(1).toLowerCase();
+    })
+    .filter((w) => w.length > 0)
+    .join(" ");
+
+  const remaining = words.slice(payeeEndIndex).join(" ").trim();
+  return { payee: payee || "Unknown", remaining: cleanupText(remaining) };
+}
+
+// ---------------------------------------------------------------------------
+// Memo cleanup — remove category keywords and clean up leftovers
+// ---------------------------------------------------------------------------
+function buildMemo(text: string, categoryKeywords: Set<string>): string {
+  let words = text.split(/\s+/).filter((w) => w.length > 0);
+
+  // Remove words that are category keywords
+  words = words.filter((w) => {
+    const lower = w.toLowerCase().replace(/[^a-z]/g, "");
+    return lower.length > 0 && !categoryKeywords.has(lower);
+  });
+
+  // Clean each word of leading/trailing punctuation junk
+  words = words.map((w) => w.replace(/^[,;:!?.]+|[,;:!?.]+$/g, "")).filter((w) => w.length > 0);
+
+  return words.join(" ").trim();
+}
+
+// ---------------------------------------------------------------------------
+// Utility: clean up stray commas, extra spaces, leading/trailing punctuation
+// ---------------------------------------------------------------------------
+function cleanupText(text: string): string {
+  return text
+    .replace(/\s*,\s*/g, " ")     // replace commas with spaces
+    .replace(/\s+/g, " ")          // collapse multiple spaces
+    .replace(/^[\s,;:!?.]+/, "")   // trim leading punctuation
+    .replace(/[\s,;:!?.]+$/, "")   // trim trailing punctuation
+    .trim();
+}
+
+function titleCase(str: string): string {
+  return str
+    .split(" ")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
-  const remaining = words.slice(payeeEndIndex).join(" ").trim();
-  return { payee, remaining };
 }
 
-function removeCategoryKeywords(text: string, categoryKeywords: Set<string>): string {
-  let result = text;
-  for (const keyword of categoryKeywords) {
-    result = result.replace(new RegExp(`\\b${keyword}\\b`, "gi"), "").trim();
-  }
-  // Clean up extra whitespace
-  return result.replace(/\s+/g, " ").trim();
-}
-
+// ---------------------------------------------------------------------------
+// Main parse function
+// ---------------------------------------------------------------------------
 export function parseTransaction(
   input: string,
   ynabCategories: string[] = [],
@@ -322,7 +426,12 @@ export function parseTransaction(
 ): ParsedTransaction {
   let needsReview = false;
 
-  const trimmed = input.trim();
+  // Normalize: strip commas and extra whitespace upfront
+  const trimmed = input
+    .trim()
+    .replace(/,/g, " ")
+    .replace(/\s+/g, " ");
+
   if (!trimmed) {
     return {
       date: format(today, "yyyy-MM-dd"),
@@ -353,7 +462,7 @@ export function parseTransaction(
   const { payee, remaining: afterPayee } = extractPayee(afterAmount, categoryKeywords);
 
   // Step 5: Memo is whatever is left after removing category keywords
-  const memo = removeCategoryKeywords(afterPayee, categoryKeywords);
+  const memo = buildMemo(afterPayee, categoryKeywords);
 
   if (!payee || payee === "Unknown") {
     needsReview = true;
