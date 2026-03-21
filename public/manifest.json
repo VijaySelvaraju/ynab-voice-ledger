@@ -1,0 +1,28 @@
+{
+  "name": "YNAB Voice Ledger",
+  "short_name": "Voice Ledger",
+  "description": "Type expenses in natural language and create transactions in YNAB",
+  "theme_color": "#2563EB",
+  "background_color": "#F9FAFB",
+  "display": "standalone",
+  "scope": "/ynab-voice-ledger/",
+  "start_url": "/ynab-voice-ledger/",
+  "icons": [
+    {
+      "src": "pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
