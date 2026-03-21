@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  base: '/ynab-voice-ledger/',
   plugins: [
     react(),
     tailwindcss(),
@@ -17,8 +18,8 @@ export default defineConfig({
         theme_color: '#2563EB',
         background_color: '#F9FAFB',
         display: 'standalone',
-        scope: '/',
-        start_url: '/',
+        scope: '/ynab-voice-ledger/',
+        start_url: '/ynab-voice-ledger/',
         icons: [
           {
             src: 'pwa-192x192.png',

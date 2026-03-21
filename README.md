@@ -48,13 +48,15 @@ In the review table, categories appear as a **dropdown** populated with your rea
 
 | Keywords | Typical Category Match |
 |---|---|
-| dining, restaurant, pizza, lunch, dinner, breakfast, cafe, coffee | Dining Out |
-| groceries, supermarket, carrefour, monoprix, lidl, aldi | Groceries |
-| metro, bus, uber, taxi, transport, navigo, train | Transportation |
-| amazon, shopping, clothes, shoes | Shopping |
-| netflix, spotify, subscription | Subscriptions |
-| pharmacy, doctor, medical | Medical |
-| rent, electricity, water, internet, phone | Bills |
+| pizza, lunch, dinner, breakfast, cafe, coffee | dining, restaurant, food, eating |
+| supermarket, carrefour, monoprix, lidl, aldi | groceries, food |
+| metro, bus, uber, taxi, navigo, train | transport, travel |
+| amazon, clothes, shoes | shopping, clothing |
+| netflix, spotify | subscription, entertainment, streaming |
+| pharmacy, doctor | medical, health |
+| rent, electricity, water, internet, phone | bills, utilities, housing |
+
+If no match is found, the category defaults to "Uncategorized" — you can always fix it in the review table or in YNAB itself.
 
 If the parser can't confidently extract a payee or amount, the row is flagged as "needs review" with a yellow highlight so you can fix it before submitting.
 
@@ -65,7 +67,7 @@ If the parser can't confidently extract a payee or amount, the row is flagged as
 A step-by-step wizard shown on first launch:
 
 1. **Enter your YNAB Personal Access Token** — stored in localStorage, shown as a password field with a reveal toggle
-2. **Select a budget** — fetched from `GET /budgets`
+2. **Select a budget** — fetched from `GET /budgets`. This also fetches your categories from `GET /budgets/{id}/categories` so the parser can match against your real category names.
 3. **Select a staging account** — fetched from `GET /budgets/{id}/accounts`, filtered to exclude closed/deleted accounts
 
 During setup, the app also fetches **all categories** from your selected budget. These are stored locally and used for both parsing and the category dropdown in the review table.
@@ -118,7 +120,7 @@ All YNAB API communication goes through one file: `src/lib/ynab-api.ts`. This mo
 - **No PUT or PATCH** — cannot update existing transactions
 - **No DELETE** — cannot delete anything
 - **No cross-account writes** — `createTransactions` validates the account ID against the stored setup config and throws an error if they don't match
-- **No other endpoints** — no scheduled transactions, no payee management, no category editing, no goal modification, no month budget changes
+- **No other endpoints** — no scheduled transactions, no payee management, no category editing, no goal modification, no month budget changes (categories are read-only during setup)
 - **No direct fetch calls** — all YNAB API traffic must go through the wrapper module
 
 ### Transaction safety defaults
