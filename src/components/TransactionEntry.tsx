@@ -99,9 +99,13 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
 
     // Show appropriate toast
     if (result.error === "rate_limit") {
-      showToast("rate_limit", "Gemini rate limit reached — used local parser. Try AI again in a minute.");
+      showToast("rate_limit", result.errorDetail
+        ? `Gemini quota error: ${result.errorDetail} — used local parser.`
+        : "Gemini rate limit reached — used local parser. Try AI again in a minute.");
     } else if (result.error && result.usedParser === "local" && parserMode === "ai") {
-      showToast("ai_fallback", "AI parser unavailable — used local parser instead.");
+      showToast("ai_fallback", result.error.startsWith("AI parser failed:")
+        ? `${result.error} — used local parser.`
+        : "AI parser unavailable — used local parser instead.");
     } else if (result.usedParser === "ai") {
       showToast("ai_success", "Parsed with AI ✓");
     }
