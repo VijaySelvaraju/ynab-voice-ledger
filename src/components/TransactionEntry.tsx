@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { parseMultipleTransactions, type ParsedTransaction } from "../lib/parser";
+import { type ParsedTransaction } from "../lib/parser";
+import { parseTransactions } from "../lib/ai-parser";
 import { createTransactions } from "../lib/ynab-api";
-import { addToHistory } from "../lib/storage";
+import { addToHistory, getGeminiApiKey, getParserMode, setParserMode } from "../lib/storage";
 import type { SetupConfig } from "../lib/storage";
 
 interface Props {
@@ -43,18 +44,67 @@ function getTodayCount(): number {
   return current.date === today ? current.count : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Toast types
+// ---------------------------------------------------------------------------
+type ToastKind = "rate_limit" | "ai_fallback" | "ai_success";
+
+interface Toast {
+  kind: ToastKind;
+  message: string;
+}
+
 export default function TransactionEntry({ config, onTransactionsCreated }: Props) {
   const [input, setInput] = useState("");
   const [rows, setRows] = useState<ReviewRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [toast, setToast] = useState<Toast | null>(null);
 
-  function handleParse() {
-    const parsed = parseMultipleTransactions(input, config.categories || []);
-    setRows(parsed.map((p) => ({ ...p, status: "pending" as const })));
+  // Parser mode — read from storage, fall back to local if no key
+  const hasGeminiKey = Boolean(getGeminiApiKey());
+  const [parserMode, setParserModeState] = useState<"ai" | "local">(() =>
+    getParserMode()
+  );
+
+  function switchMode(mode: "ai" | "local") {
+    setParserModeState(mode);
+    setParserMode(mode);
+  }
+
+  function showToast(kind: ToastKind, message: string) {
+    setToast({ kind, message });
+    setTimeout(() => setToast(null), 4000);
+  }
+
+  async function handleParse() {
+    if (!input.trim()) return;
+    setParsing(true);
+    setToast(null);
+
+    const apiKey = getGeminiApiKey();
+    const result = await parseTransactions(
+      input,
+      config.categories || [],
+      apiKey,
+      parserMode
+    );
+
+    setRows(result.transactions.map((p) => ({ ...p, status: "pending" as const })));
     setSubmitted(false);
     setShowConfirm(false);
+    setParsing(false);
+
+    // Show appropriate toast
+    if (result.error === "rate_limit") {
+      showToast("rate_limit", "Gemini rate limit reached — used local parser. Try AI again in a minute.");
+    } else if (result.error && result.usedParser === "local" && parserMode === "ai") {
+      showToast("ai_fallback", "AI parser unavailable — used local parser instead.");
+    } else if (result.usedParser === "ai") {
+      showToast("ai_success", "Parsed with AI ✓");
+    }
   }
 
   function updateRow(index: number, field: keyof ParsedTransaction, value: string | number) {
@@ -139,6 +189,7 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
     setRows([]);
     setSubmitted(false);
     setShowConfirm(false);
+    setToast(null);
   }
 
   const hasPendingRows = rows.some((r) => r.status === "pending");
@@ -147,27 +198,101 @@ export default function TransactionEntry({ config, onTransactionsCreated }: Prop
   // Build category options from config
   const categoryOptions = ["Uncategorized", ...(config.categories || []).filter((c) => c !== "Uncategorized")];
 
+  const isAiMode = parserMode === "ai" && hasGeminiKey;
+
   return (
     <div>
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className={`mb-4 rounded-lg p-3 text-sm font-medium ${
+            toast.kind === "rate_limit"
+              ? "bg-orange-50 border border-orange-200 text-orange-700"
+              : toast.kind === "ai_fallback"
+                ? "bg-yellow-50 border border-yellow-200 text-yellow-700"
+                : "bg-green-50 border border-green-200 text-green-700"
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+
       {/* Input area */}
       <div className="mb-6">
+        {/* Parser mode toggle */}
+        <div className="flex items-center gap-3 mb-3">
+          <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Parser</span>
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm">
+            <button
+              onClick={() => switchMode("local")}
+              className={`px-3 py-1.5 font-medium transition-colors ${
+                parserMode === "local"
+                  ? "bg-gray-800 text-white"
+                  : "bg-white text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              Local
+            </button>
+            <button
+              onClick={() => hasGeminiKey && switchMode("ai")}
+              disabled={!hasGeminiKey}
+              title={hasGeminiKey ? undefined : "Add Gemini API key in settings"}
+              className={`px-3 py-1.5 font-medium transition-colors ${
+                isAiMode
+                  ? "bg-blue-600 text-white"
+                  : hasGeminiKey
+                    ? "bg-white text-gray-600 hover:bg-gray-50"
+                    : "bg-white text-gray-300 cursor-not-allowed"
+              }`}
+            >
+              AI
+            </button>
+          </div>
+          {isAiMode && (
+            <span className="text-xs text-blue-500">Gemini 2.0 Flash</span>
+          )}
+          {!hasGeminiKey && (
+            <span className="text-xs text-gray-400">
+              No AI key — <span className="text-blue-400">add one in settings</span>
+            </span>
+          )}
+        </div>
+
         <label className="block text-sm font-medium text-gray-700 mb-1">
-          Enter transactions (one per line)
+          {isAiMode ? "Describe your expenses" : "Enter transactions (one per line)"}
         </label>
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={`Examples:\n20th march dominos pizza dining out two pizzas 16 euros\ntoday metro transport going to office 1.90\nyesterday amazon shopping new headphones 29.99`}
+          placeholder={
+            isAiMode
+              ? "Describe your expenses naturally — type or dictate multiple transactions in any format...\n\nExample: \"Had lunch at Domino's, two pizzas 16 euros. Then grabbed coffee at Starbucks for 4.50. Oh and yesterday I paid 45 at Carrefour for groceries\""
+              : `Examples:\n20th march dominos pizza dining out two pizzas 16 euros\ntoday metro transport going to office 1.90\nyesterday amazon shopping new headphones 29.99`
+          }
           rows={5}
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"
         />
         <div className="flex gap-2 mt-2">
           <button
             onClick={handleParse}
-            disabled={!input.trim()}
-            className="bg-blue-600 text-white rounded-lg py-2 px-4 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!input.trim() || parsing}
+            className="bg-blue-600 text-white rounded-lg py-2 px-4 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            Parse
+            {parsing && isAiMode ? (
+              <>
+                <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+                Parsing with AI...
+              </>
+            ) : parsing ? (
+              "Parsing..."
+            ) : isAiMode ? (
+              "Parse with AI"
+            ) : (
+              "Parse"
+            )}
           </button>
           <button
             onClick={handleClear}
