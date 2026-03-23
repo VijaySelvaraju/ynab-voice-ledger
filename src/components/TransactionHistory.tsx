@@ -22,23 +22,23 @@ export default function TransactionHistory({ refreshKey }: Props) {
   }
 
   return (
-    <div className="border-t border-gray-200 pt-6">
-      <h3 className="text-sm font-medium text-gray-700 mb-3">
-        Recent Transactions ({history.length})
+    <div className="border-t border-surface-light pt-6 mt-6">
+      <h3 className="text-sm font-semibold text-text-primary mb-4">
+        Recent Transactions <span className="text-text-dim font-normal">({history.length})</span>
       </h3>
       <div className="space-y-2">
         {history.map((entry, i) => (
           <div
             key={`${entry.createdAt}-${i}`}
-            className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 text-sm"
+            className="flex items-center justify-between bg-surface rounded-[12px] px-4 py-3 text-sm"
           >
-            <div className="flex-1">
-              <span className="font-medium text-gray-900">{entry.payee}</span>
-              <span className="text-gray-400 ml-2">{entry.date}</span>
+            <div className="flex-1 min-w-0">
+              <span className="font-medium text-text-primary">{entry.payee}</span>
+              <span className="text-text-dim text-xs ml-2">{entry.date}</span>
             </div>
-            <div className="text-right">
-              <span className="font-medium text-gray-900">{formatAmount(entry.amount)}</span>
-              <span className="text-gray-400 text-xs ml-2 block">
+            <div className="text-right shrink-0 ml-3">
+              <span className="font-mono font-semibold text-cyan">{formatAmount(entry.amount)}</span>
+              <span className="text-text-dim text-[10px] ml-2 block">
                 {formatTimestamp(entry.createdAt)}
               </span>
             </div>

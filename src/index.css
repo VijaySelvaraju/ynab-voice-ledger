@@ -1,1 +1,49 @@
 @import "tailwindcss";
+
+@theme {
+  --color-navy: #1A1E2E;
+  --color-surface: #242838;
+  --color-surface-hover: #2D3148;
+  --color-surface-light: #323750;
+  --color-cyan: #00E5FF;
+  --color-cyan-dim: #00B8D4;
+  --color-cyan-glow: rgba(0, 229, 255, 0.15);
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-text-primary: #F8FAFC;
+  --color-text-muted: #8B949E;
+  --color-text-dim: #565D6B;
+  --font-family-sans: "Manrope", sans-serif;
+  --font-family-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  background-color: #1A1E2E;
+  color: #F8FAFC;
+  font-family: "Manrope", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #323750;
+  border-radius: 3px;
+}
+
+/* Input/select dark styling - browser overrides */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+select option {
+  background: #242838;
+  color: #F8FAFC;
+}
