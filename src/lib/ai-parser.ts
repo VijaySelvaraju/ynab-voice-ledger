@@ -77,10 +77,12 @@ async function callGemini(prompt: string, apiKey: string): Promise<string> {
     throw new GeminiAuthError("Invalid API key");
   }
   if (response.status === 429) {
-    throw new GeminiRateLimitError("Rate limit exceeded");
+    const detail = await extractErrorMessage(response);
+    throw new GeminiRateLimitError(detail || "Rate limit exceeded");
   }
   if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status}`);
+    const detail = await extractErrorMessage(response);
+    throw new Error(detail || `Gemini API error: ${response.status}`);
   }
 
   const data = await response.json();
@@ -89,6 +91,18 @@ async function callGemini(prompt: string, apiKey: string): Promise<string> {
     throw new Error("Unexpected Gemini response shape");
   }
   return text;
+}
+
+// ---------------------------------------------------------------------------
+// Extract human-readable error message from Gemini error responses
+// ---------------------------------------------------------------------------
+async function extractErrorMessage(response: Response): Promise<string | null> {
+  try {
+    const data = await response.json();
+    return data?.error?.message || null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,15 +194,21 @@ export async function validateGeminiApiKey(
   apiKey: string
 ): Promise<{ valid: boolean; error?: string }> {
   try {
-    await parseWithAI("test coffee 1 euro", [], apiKey);
-    return { valid: true };
-  } catch (e) {
-    if (e instanceof GeminiAuthError) {
+    // Use a lightweight models.get call that doesn't consume generation quota
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash?key=${apiKey}`;
+    const response = await fetch(url);
+    if (response.status === 401 || response.status === 403) {
       return { valid: false, error: "invalid_key" };
     }
-    if (e instanceof GeminiRateLimitError) {
-      return { valid: false, error: "rate_limit" };
+    if (response.status === 404) {
+      return { valid: false, error: "invalid_key" };
     }
+    if (!response.ok) {
+      const detail = await extractErrorMessage(response);
+      return { valid: false, error: detail || "network" };
+    }
+    return { valid: true };
+  } catch {
     return { valid: false, error: "network" };
   }
 }
@@ -201,7 +221,7 @@ export async function parseTransactions(
   categories: string[],
   apiKey: string | null,
   mode: "ai" | "local"
-): Promise<{ transactions: ParsedTransaction[]; usedParser: "ai" | "local"; error?: string }> {
+): Promise<{ transactions: ParsedTransaction[]; usedParser: "ai" | "local"; error?: string; errorDetail?: string }> {
   if (mode === "ai" && apiKey) {
     try {
       const transactions = await parseWithAI(input, categories, apiKey);
@@ -209,7 +229,7 @@ export async function parseTransactions(
     } catch (e) {
       if (e instanceof GeminiRateLimitError) {
         const fallback = parseMultipleTransactions(input, categories);
-        return { transactions: fallback, usedParser: "local", error: "rate_limit" };
+        return { transactions: fallback, usedParser: "local", error: "rate_limit", errorDetail: e.message };
       }
       const msg = e instanceof Error ? e.message : "Unknown error";
       const fallback = parseMultipleTransactions(input, categories);
