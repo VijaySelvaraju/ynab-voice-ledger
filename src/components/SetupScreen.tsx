@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { fetchBudgets, fetchAccounts, fetchCategories, type Budget, type Account } from "../lib/ynab-api";
-import { saveSetup, type SetupConfig } from "../lib/storage";
+import { saveSetup, setGeminiApiKey, setParserMode, type SetupConfig } from "../lib/storage";
+import { validateGeminiApiKey } from "../lib/ai-parser";
 
 interface Props {
   onComplete: (config: SetupConfig) => void;
@@ -14,9 +15,19 @@ export default function SetupScreen({ onComplete }: Props) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedAccount, setSelectedAccount] = useState("");
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Step 4 state
+  const [geminiKey, setGeminiKey] = useState("");
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [geminiValidating, setGeminiValidating] = useState(false);
+  const [geminiError, setGeminiError] = useState("");
+  const [geminiSuccess, setGeminiSuccess] = useState(false);
+
+  // Saved config from steps 1-3 (used when proceeding to step 4)
+  const [pendingConfig, setPendingConfig] = useState<SetupConfig | null>(null);
 
   async function handleTokenSubmit() {
     if (!token.trim()) return;
@@ -52,7 +63,7 @@ export default function SetupScreen({ onComplete }: Props) {
     }
   }
 
-  function handleSave() {
+  function handleSaveAccount() {
     const account = accounts.find((a) => a.id === selectedAccount);
     if (!account) return;
     const config: SetupConfig = {
@@ -63,7 +74,38 @@ export default function SetupScreen({ onComplete }: Props) {
       categories,
     };
     saveSetup(config);
-    onComplete(config);
+    setPendingConfig(config);
+    setStep(4);
+  }
+
+  async function handleSaveGeminiKey() {
+    if (!geminiKey.trim() || !pendingConfig) return;
+    setGeminiValidating(true);
+    setGeminiError("");
+    setGeminiSuccess(false);
+
+    const result = await validateGeminiApiKey(geminiKey.trim());
+
+    if (result.valid) {
+      setGeminiApiKey(geminiKey.trim());
+      setParserMode("ai");
+      setGeminiSuccess(true);
+      setTimeout(() => onComplete(pendingConfig), 600);
+    } else if (result.error === "invalid_key") {
+      setGeminiError("Invalid API key — please check and try again.");
+      setGeminiValidating(false);
+    } else {
+      // Network error or rate limit — save anyway, don't block setup
+      setGeminiApiKey(geminiKey.trim());
+      setParserMode("ai");
+      onComplete(pendingConfig);
+    }
+  }
+
+  function handleSkipGemini() {
+    if (!pendingConfig) return;
+    setParserMode("local");
+    onComplete(pendingConfig);
   }
 
   return (
@@ -74,7 +116,7 @@ export default function SetupScreen({ onComplete }: Props) {
 
         {/* Step indicators */}
         <div className="flex gap-2 mb-6">
-          {[1, 2, 3].map((s) => (
+          {[1, 2, 3, 4].map((s) => (
             <div
               key={s}
               className={`h-1.5 flex-1 rounded-full ${
@@ -170,12 +212,84 @@ export default function SetupScreen({ onComplete }: Props) {
               All transactions will be created in this account only.
             </p>
             <button
-              onClick={handleSave}
+              onClick={handleSaveAccount}
               disabled={!selectedAccount}
               className="mt-4 w-full bg-green-600 text-white rounded-lg py-2 px-4 font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Save Setup
+              Next
             </button>
+          </div>
+        )}
+
+        {/* Step 4: Gemini API key (optional) */}
+        {step === 4 && (
+          <div>
+            <h2 className="text-base font-semibold text-gray-800 mb-1">AI Parser <span className="text-xs font-normal text-gray-400">(Optional)</span></h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Add a Google AI Studio API key to enable AI-powered parsing. This lets you describe
+              multiple expenses in free-form text or voice dictation — no need to format one per line.
+              Without this, the app uses the built-in rule-based parser.
+            </p>
+
+            <div className="relative mb-1">
+              <input
+                type={showGeminiKey ? "text" : "password"}
+                value={geminiKey}
+                onChange={(e) => {
+                  setGeminiKey(e.target.value);
+                  setGeminiError("");
+                  setGeminiSuccess(false);
+                }}
+                placeholder="Paste your Gemini API key"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                onKeyDown={(e) => e.key === "Enter" && handleSaveGeminiKey()}
+              />
+              <button
+                type="button"
+                onClick={() => setShowGeminiKey(!showGeminiKey)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700"
+              >
+                {showGeminiKey ? "Hide" : "Show"}
+              </button>
+            </div>
+
+            <a
+              href="https://aistudio.google.com/apikey"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-blue-500 hover:underline"
+            >
+              Get a free key from Google AI Studio →
+            </a>
+
+            {geminiError && (
+              <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">
+                {geminiError}
+              </div>
+            )}
+
+            {geminiSuccess && (
+              <div className="mt-3 bg-green-50 border border-green-200 text-green-700 rounded-lg p-3 text-sm">
+                ✓ API key validated — AI parser enabled!
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={handleSaveGeminiKey}
+                disabled={!geminiKey.trim() || geminiValidating || geminiSuccess}
+                className="flex-1 bg-blue-600 text-white rounded-lg py-2 px-4 font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {geminiValidating ? "Validating..." : "Save & Continue"}
+              </button>
+              <button
+                onClick={handleSkipGemini}
+                disabled={geminiValidating}
+                className="flex-1 bg-gray-100 text-gray-700 rounded-lg py-2 px-4 font-medium hover:bg-gray-200 disabled:opacity-50"
+              >
+                Skip
+              </button>
+            </div>
           </div>
         )}
       </div>

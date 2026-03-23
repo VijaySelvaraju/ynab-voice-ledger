@@ -2,11 +2,13 @@ import { useState } from "react";
 import SetupScreen from "./components/SetupScreen";
 import TransactionEntry from "./components/TransactionEntry";
 import TransactionHistory from "./components/TransactionHistory";
-import { getSetup, clearSetup, type SetupConfig } from "./lib/storage";
+import AiKeyModal from "./components/AiKeyModal";
+import { getSetup, clearSetup, getGeminiApiKey, type SetupConfig } from "./lib/storage";
 
 export default function App() {
   const [config, setConfig] = useState<SetupConfig | null>(getSetup);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const [showAiKeyModal, setShowAiKeyModal] = useState(false);
 
   if (!config) {
     return <SetupScreen onComplete={(c) => setConfig(c)} />;
@@ -16,6 +18,8 @@ export default function App() {
     clearSetup();
     setConfig(null);
   }
+
+  const hasGeminiKey = Boolean(getGeminiApiKey());
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -33,12 +37,20 @@ export default function App() {
               </span>
             </div>
           </div>
-          <button
-            onClick={handleReset}
-            className="text-sm text-gray-400 hover:text-red-500"
-          >
-            Reset Setup
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowAiKeyModal(true)}
+              className="text-sm text-gray-400 hover:text-blue-500"
+            >
+              {hasGeminiKey ? "AI key ✓" : "Configure AI"}
+            </button>
+            <button
+              onClick={handleReset}
+              className="text-sm text-gray-400 hover:text-red-500"
+            >
+              Reset Setup
+            </button>
+          </div>
         </div>
 
         {/* Transaction Entry */}
@@ -50,6 +62,11 @@ export default function App() {
         {/* History */}
         <TransactionHistory refreshKey={historyRefreshKey} />
       </div>
+
+      {/* AI key modal */}
+      {showAiKeyModal && (
+        <AiKeyModal onClose={() => setShowAiKeyModal(false)} />
+      )}
     </div>
   );
 }

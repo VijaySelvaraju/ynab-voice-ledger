@@ -2,20 +2,34 @@
 
 A progressive web app that lets you type expenses in natural language, parses them into structured fields, and creates transactions in YNAB — locked to a single staging account for safety.
 
-Built with Vite + React + TypeScript + Tailwind CSS. No backend, no AI — just deterministic rule-based parsing and the YNAB API. Installable as a PWA on mobile and desktop.
+Built with Vite + React + TypeScript + Tailwind CSS. No backend. Optional AI-powered parsing via Gemini 2.0 Flash. Installable as a PWA on mobile and desktop.
 
 ## How It Works
 
 The workflow is designed for speed: **type → parse → review → submit**.
 
-1. **Type** one or more expenses in plain language (one per line)
-2. **Parse** extracts date, payee, category, memo, and amount from each line
+1. **Type** (or dictate) your expenses in plain language
+2. **Parse** extracts date, payee, category, memo, and amount — using AI or the local rule-based parser
 3. **Review** the parsed results in an editable table — fix anything that looks off
 4. **Submit** creates all transactions in your pre-selected YNAB staging account
 
 All transactions are created as **unapproved** and **uncleared** in YNAB, giving you a built-in review step before they affect your budget.
 
-## Input Examples
+## AI Parser (Optional)
+
+The app supports two parsing modes, selectable per-session with a toggle:
+
+**AI mode** (requires a free Google AI Studio API key) — describe any number of expenses in free-form natural language, including voice dictation output:
+
+```
+so today I had lunch at dominos like two pizzas and it was about sixteen euros
+and then um yesterday I grabbed coffee at starbucks for like four fifty oh and
+I also went to carrefour for groceries that was around forty five euros fifty
+```
+
+Gemini 2.0 Flash extracts all 3 transactions, handles filler words, normalises brand names, maps to your real YNAB categories, and converts spoken numbers to digits.
+
+**Local mode** (default, no API key needed) — deterministic rule-based parser, works offline, one transaction per line:
 
 ```
 20th march dominos pizza dining out two pizzas for dinner 16 euros
@@ -23,6 +37,20 @@ march 15 carrefour groceries weekly shopping 45.50
 today metro transport going to office 1.90
 yesterday amazon shopping new headphones 29.99
 ```
+
+### Getting a Gemini API key
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
+2. Create a free API key (Gemini 2.0 Flash is included in the free tier)
+3. During setup (step 4) or via the **Configure AI** button in the header, paste the key
+4. The app validates it with a lightweight test call before saving
+5. After deploying, add HTTP referrer restrictions in the Google Cloud Console to lock the key to your domain only
+
+### Fallback behaviour
+
+If the Gemini API is unavailable, the app automatically falls back to the local parser and shows a toast notification. Rate-limit errors show a specific "Try again in a minute" message instead of a generic error.
+
+## Input Examples (Local Parser)
 
 Each line is parsed independently. The parser extracts:
 
@@ -69,6 +97,7 @@ A step-by-step wizard shown on first launch:
 1. **Enter your YNAB Personal Access Token** — stored in localStorage, shown as a password field with a reveal toggle
 2. **Select a budget** — fetched from `GET /budgets`. This also fetches your categories from `GET /budgets/{id}/categories` so the parser can match against your real category names.
 3. **Select a staging account** — fetched from `GET /budgets/{id}/accounts`, filtered to exclude closed/deleted accounts
+4. **AI Parser (optional)** — enter a Google AI Studio API key to enable Gemini parsing. Validated with a lightweight test call. Skip to use local parser only.
 
 During setup, the app also fetches **all categories** from your selected budget. These are stored locally and used for both parsing and the category dropdown in the review table.
 
@@ -77,12 +106,15 @@ The selected account (e.g., "Inbox") is the **only** account the app will ever w
 ### Main Screen
 
 - The locked account name is displayed prominently at the top so you always know where transactions are going
-- Large textarea for typing/pasting natural language entries
-- **Parse** button runs the local parser (no network calls)
+- **Parser mode toggle** — switch between AI (Gemini) and Local modes; AI option is greyed out if no API key is configured
+- Large textarea — placeholder adapts to the active mode (freeform for AI, one-per-line for local)
+- **Parse** / **Parse with AI** button — shows a spinner and "Parsing with AI..." when a network call is in progress
+- Toast notifications — "Parsed with AI ✓", fallback warning, or rate-limit message after each parse
 - Editable review table with columns: Date, Payee, Category (dropdown), Memo, Amount, Status
 - **Transaction summary** showing count and total amount before submission
 - **Create All** triggers a confirmation dialog before sending to YNAB
 - **Clear** resets everything
+- **Configure AI** / **AI key ✓** button in the header — add or remove the Gemini key without resetting YNAB setup
 
 ### Transaction History
 
@@ -196,13 +228,15 @@ src/
 ├── App.tsx                           # Root component — routes between Setup and Main
 ├── index.css                         # Tailwind CSS import
 ├── components/
-│   ├── SetupScreen.tsx               # One-time setup wizard (token → budget → account → categories)
-│   ├── TransactionEntry.tsx          # Main screen: input, parse, review table, guardrails, submit
-│   └── TransactionHistory.tsx        # Last 20 transactions created via the app
+│   ├── SetupScreen.tsx               # One-time setup wizard (token → budget → account → AI key)
+│   ├── TransactionEntry.tsx          # Main screen: mode toggle, input, parse, review, submit
+│   ├── TransactionHistory.tsx        # Last 20 transactions created via the app
+│   └── AiKeyModal.tsx                # Modal for adding/removing Gemini key post-setup
 └── lib/
     ├── ynab-api.ts                   # YNAB API wrapper — the ONLY module that talks to YNAB
-    ├── parser.ts                     # Rule-based natural language parser with category matching
-    └── storage.ts                    # localStorage helpers for setup config and history
+    ├── parser.ts                     # Rule-based natural language parser (local fallback)
+    ├── ai-parser.ts                  # Gemini 2.0 Flash AI parser with fallback logic
+    └── storage.ts                    # localStorage helpers for setup config, history, AI key
 public/
 ├── pwa-192x192.png                   # PWA icon (192×192)
 └── pwa-512x512.png                   # PWA icon (512×512)
@@ -217,14 +251,16 @@ public/
 | [TypeScript](https://www.typescriptlang.org) 5.9 | Type safety |
 | [Tailwind CSS](https://tailwindcss.com) 4 | Utility-first styling |
 | [date-fns](https://date-fns.org) 4 | Date parsing and formatting |
-| [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) | PWA manifest and service worker generation |
+| [Gemini 2.0 Flash](https://ai.google.dev/gemini-api) *(optional)* | AI-powered natural language transaction parsing |
 
-No AI/LLM libraries. No backend server. No OAuth. No database. All state lives in localStorage.
+No AI SDK installed — Gemini is called directly via `fetch` to keep the bundle small. No backend server. No OAuth. No database. All state lives in localStorage.
 
 ## Design Decisions
 
-- **Rule-based parser over AI**: Deterministic, fast, works offline, no API costs. The trade-off is less flexibility, but the editable review table compensates — you can always fix what the parser gets wrong.
-- **Real category matching**: Categories are fetched from your actual YNAB budget and matched using scored multi-tier logic, not hardcoded strings.
+- **AI as enhancement, not replacement**: Gemini 2.0 Flash was added to handle freeform multi-transaction input and voice dictation (Wispr Flow), which the regex parser can't handle well. The rule-based parser remains as the offline fallback — deterministic, instant, no API costs.
+- **Gemini Flash specifically**: Free tier, fast response, and native JSON output mode (`responseMimeType: "application/json"`) means no prompt engineering tricks needed to get structured output. Called directly via `fetch` — no SDK, no extra bundle weight.
+- **User-provided API key**: Since there's no backend, the Gemini key is stored in localStorage and sent directly to Google from the browser — the same trust model as the YNAB token. Each user uses their own key, so there's no risk of someone exploiting yours.
+- **Real category matching**: Categories are fetched from your actual YNAB budget and matched using scored multi-tier logic (local parser) or passed directly to Gemini as a list (AI parser) so the model picks from your real categories.
 - **Single staging account**: Rather than guarding against mistakes with confirmation dialogs alone, the app is architecturally limited to one account. You move transactions to the right account in YNAB itself.
 - **Multiple guardrails**: Confirmation dialog, amount warnings, daily limits, and review flags work together to prevent mistakes.
 - **Unapproved by default**: Transactions need explicit approval in YNAB, acting as a final safety net.
