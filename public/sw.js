@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ynab-voice-ledger-v1';
+const CACHE_NAME = 'ynab-voice-ledger-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -18,8 +18,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
-  // Network-first for YNAB API calls
-  if (request.url.includes('api.ynab.com')) {
+  // Network-first for API calls
+  if (request.url.includes('api.ynab.com') || request.url.includes('generativelanguage.googleapis.com')) {
     event.respondWith(
       fetch(request)
         .then((response) => {
@@ -32,7 +32,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for app assets
+  // Network-first for navigation requests (HTML pages)
+  // This ensures new deploys are picked up immediately
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // Cache-first for static assets (JS, CSS, images — content-hashed)
   if (request.method === 'GET') {
     event.respondWith(
       caches.match(request).then((cached) => {
